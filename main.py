@@ -1,3 +1,5 @@
+from http.client import responses
+
 import discord
 from discord.ext import commands
 import logging
@@ -120,6 +122,30 @@ async def roulette(ctx):
             print(f"Failed to timeout: {e}")
     else:
         await ctx.send(f"{ctx.author.mention} - lives to see another day.")
+
+@bot.command()
+async def ping(ctx):
+    await ctx.send(f'Pong! {round(bot.latency * 1000)}ms')
+
+@bot.command()
+async def eightball(ctx, question=None):
+    try:
+        with open("8ball_responses.txt", "r") as f:
+            response = [line.strip() for line in f if line.strip()]
+        if not response:
+            await ctx.send("No responses available.")
+            return 
+        response = random.choice(response)
+        if question:
+            await ctx.send(f"{ctx.author.mention} - {response}")
+        else:
+            await ctx.send(f"{ctx.author.mention} - {response}")
+    except FileNotFoundError:
+        await ctx.send("Sorry, I can't access my magic 8 ball responses right now.")
+    except Exception as e:
+        await ctx.send("An error occurred while processing your request.")
+        print(f"Error in eightball command: {e}")
+
 
 webserver.keep_alive()
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
