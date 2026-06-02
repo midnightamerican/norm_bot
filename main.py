@@ -16,10 +16,12 @@ from datetime import timedelta
 # CONFIGURATION
 # =====================================================
 
-load_dotenv()
+import os
+TOKEN = os.getenv("DSCORD_TOKEN")
 
-with open("token.txt", "r") as f:
-    TOKEN = f.read().strip()
+if not TOKEN: 
+    raise ValueError("DISCORD_TOKEN not found")
+
 
 MOD_LOG_CHANNEL = 000000000000000000  # Replace if desired
 
