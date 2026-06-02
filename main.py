@@ -18,7 +18,8 @@ from datetime import timedelta
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+with open("token.txt", "r") as f:
+    TOKEN = f.read().strip()
 
 MOD_LOG_CHANNEL = 000000000000000000  # Replace if desired
 
