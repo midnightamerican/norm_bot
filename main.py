@@ -33,6 +33,11 @@ try:
 except ValueError:
     MOD_LOG_CHANNEL = 0
 
+try:
+    GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+except ValueError:
+    GUILD_ID = 0
+
 SECRET_ROLE = "Niner"
 
 WARNING_FILE = os.path.join(BASE_DIR, "warnings.json")
@@ -101,6 +106,7 @@ bot = commands.Bot(
 user_messages = {}
 timeout_counts = {}
 last_timeout = {}
+slash_commands_synced = False
 
 URL_PATTERN = re.compile(
     r'https?://[^\s]+|www\.[^\s]+',
@@ -355,6 +361,31 @@ async def log_action(guild, message):
         except Exception:
             pass
 
+async def sync_application_commands(guild=None):
+
+    if guild:
+        synced = await bot.tree.sync(guild=guild)
+        scope = f"guild {guild.id}"
+    elif GUILD_ID:
+        guild = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        scope = f"guild {GUILD_ID}"
+    else:
+        synced = await bot.tree.sync()
+        scope = "global"
+
+    names = ", ".join(
+        command.name
+        for command in synced
+    )
+
+    print(
+        f"Synced {len(synced)} slash commands to {scope}: {names}"
+    )
+
+    return synced
+
 # =====================================================
 # WARNING SYSTEM
 # =====================================================
@@ -403,15 +434,15 @@ async def add_warning(member, reason="No reason provided"):
 @bot.event
 async def on_ready():
 
-    try:
-        synced = await bot.tree.sync()
+    global slash_commands_synced
 
-        print(
-            f"Synced {len(synced)} slash commands."
-        )
+    try:
+        if not slash_commands_synced:
+            await sync_application_commands()
+            slash_commands_synced = True
 
     except Exception as e:
-        print(e)
+        print(f"Slash command sync failed: {e}")
 
     print(
         f"Logged in as {bot.user}"
@@ -931,6 +962,39 @@ async def remove(
         f"Removed {role.name} "
         f"from {member.mention}"
     )
+
+# =====================================================
+# PREFIX ADMIN COMMANDS
+# =====================================================
+
+@bot.command(
+    name="synccommands"
+)
+@commands.has_permissions(
+    manage_guild=True
+)
+async def synccommands(ctx):
+
+    try:
+        synced = await sync_application_commands(
+            guild=ctx.guild
+        )
+
+        names = ", ".join(
+            command.name
+            for command in synced
+        )
+
+        await ctx.send(
+            f"Synced {len(synced)} slash commands here: {names}"
+        )
+
+    except Exception as e:
+        print(f"Manual slash command sync failed: {e}")
+
+        await ctx.send(
+            "I couldn't sync slash commands. Check the console log."
+        )
 
 # =====================================================
 # ERROR HANDLER
