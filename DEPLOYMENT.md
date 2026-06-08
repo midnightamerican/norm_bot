@@ -48,10 +48,45 @@ The bot also needs the server permissions for the features you use:
 
 For moderation to work, the bot's highest role must be above the roles it needs to moderate.
 
+## Fly.io
+
+This repo includes a `Dockerfile` and `fly.toml` for Fly.io.
+
+If your Fly app name is not `norm-bot`, update this line in `fly.toml`:
+
+```toml
+app = "norm-bot"
+```
+
+Set secrets before deploying:
+
+```bash
+fly secrets set DISCORD_TOKEN=your_real_bot_token GUILD_ID=your_discord_server_id MOD_LOG_CHANNEL=0
+```
+
+Then deploy:
+
+```bash
+fly deploy
+```
+
+If Fly says the app is not listening on a port, that is okay for this bot as long as it is only a warning. This bot is a worker process and does not need an HTTP service.
+
+If the Machine starts and then exits, check logs:
+
+```bash
+fly logs
+```
+
+Common causes:
+
+- `DISCORD_TOKEN` is missing or wrong.
+- The bot token was reset in the Discord Developer Portal.
+- The app name in `fly.toml` does not match your Fly app.
+- The bot was invited without the `applications.commands` scope.
+
 ## Other Hosting Options
 
 Render can work, but use a paid Background Worker. Free Render web services spin down when idle, which is not good for a Discord bot.
-
-Fly.io can work well, especially with Docker, but it is a little more technical to set up.
 
 A cheap VPS also works. Install Python, install `requirements.txt`, set environment variables, and keep the bot running with `systemd`, `pm2`, or Docker.
