@@ -1,0 +1,6 @@
+.env
+token.txt
+discord.log
+warnings.json
+__pycache__/
+*.pyc

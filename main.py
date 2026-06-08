@@ -11,23 +11,32 @@ import logging
 import time
 
 from datetime import timedelta
+from urllib.parse import urlparse
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
 
-import os
-TOKEN = os.getenv("DSCORD_TOKEN")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN: 
     raise ValueError("DISCORD_TOKEN not found")
 
 
-MOD_LOG_CHANNEL = 000000000000000000  # Replace if desired
+try:
+    MOD_LOG_CHANNEL = int(os.getenv("MOD_LOG_CHANNEL", "0"))
+except ValueError:
+    MOD_LOG_CHANNEL = 0
 
 SECRET_ROLE = "Niner"
 
-WARNING_FILE = "warnings.json"
+WARNING_FILE = os.path.join(BASE_DIR, "warnings.json")
+BAD_WORDS_FILE = os.path.join(BASE_DIR, "No_No_Words.txt")
+EIGHTBALL_RESPONSES_FILE = os.path.join(BASE_DIR, "8ball_responses")
 
 ALLOWED_DOMAINS = [
     "x.com",
@@ -45,7 +54,7 @@ SPAM_LIMIT = 3
 # =====================================================
 
 handler = logging.FileHandler(
-    filename="discord.log",
+    filename=os.path.join(BASE_DIR, "discord.log"),
     encoding="utf-8",
     mode="w"
 )
@@ -76,6 +85,52 @@ URL_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+def is_allowed_url(url):
+
+    if url.lower().startswith("www."):
+        url = f"https://{url}"
+
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().split(":")[0]
+
+    return any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in ALLOWED_DOMAINS
+    )
+
+def contains_bad_word(content):
+
+    normalized = content.lower()
+
+    return next(
+        (
+            word for word in BAD_WORDS
+            if re.search(
+                rf"\b{re.escape(word)}\b",
+                normalized
+            )
+        ),
+        None
+    )
+
+async def send_interaction_message(
+    interaction,
+    content,
+    *,
+    ephemeral=False
+):
+
+    if interaction.response.is_done():
+        await interaction.followup.send(
+            content,
+            ephemeral=ephemeral
+        )
+    else:
+        await interaction.response.send_message(
+            content,
+            ephemeral=ephemeral
+        )
+
 # =====================================================
 # JSON UTILITIES
 # =====================================================
@@ -86,8 +141,11 @@ def load_warnings():
         with open(WARNING_FILE, "w") as f:
             json.dump({}, f)
 
-    with open(WARNING_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(WARNING_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return {}
 
 def save_warnings(data):
 
@@ -101,7 +159,7 @@ warnings_data = load_warnings()
 # =====================================================
 
 try:
-    with open("badwords.txt", "r", encoding="utf-8") as f:
+    with open(BAD_WORDS_FILE, "r", encoding="utf-8") as f:
         BAD_WORDS = {
             line.strip().lower()
             for line in f
@@ -109,6 +167,28 @@ try:
         }
 except FileNotFoundError:
     BAD_WORDS = set()
+
+try:
+    with open(EIGHTBALL_RESPONSES_FILE, "r", encoding="utf-8") as f:
+        EIGHTBALL_RESPONSES = [
+            line.strip()
+            for line in f
+            if line.strip()
+        ]
+except FileNotFoundError:
+    EIGHTBALL_RESPONSES = []
+
+if not EIGHTBALL_RESPONSES:
+    EIGHTBALL_RESPONSES = [
+        "Yes",
+        "No",
+        "Maybe",
+        "Absolutely",
+        "Ask again later",
+        "Definitely not",
+        "Without a doubt",
+        "Very likely"
+    ]
 
 # =====================================================
 # MOD LOGGING
@@ -246,6 +326,8 @@ async def on_message(message):
                 f"timed out for spamming."
             )
 
+            user_messages[user_id] = []
+
             if timeout_counts[user_id] > 2:
 
                 await message.author.ban(
@@ -270,18 +352,10 @@ async def on_message(message):
 
     if urls:
 
-        allowed = False
-
-        for url in urls:
-
-            for domain in ALLOWED_DOMAINS:
-
-                if domain.lower() in url.lower():
-                    allowed = True
-                    break
-
-            if allowed:
-                break
+        allowed = all(
+            is_allowed_url(url)
+            for url in urls
+        )
 
         if not allowed:
 
@@ -308,30 +382,30 @@ async def on_message(message):
     # BAD WORD FILTER
     # ---------------------------------------------
 
-    content = message.content.lower()
+    bad_word = contains_bad_word(
+        message.content
+    )
 
-    for word in BAD_WORDS:
+    if bad_word:
 
-        if word in content:
+        try:
 
-            try:
+            await message.delete()
 
-                await message.delete()
+            await message.channel.send(
+                f"{message.author.mention} "
+                f"watch your language."
+            )
 
-                await message.channel.send(
-                    f"{message.author.mention} "
-                    f"watch your language."
-                )
+            await add_warning(
+                message.author,
+                f"Bad word: {bad_word}"
+            )
 
-                await add_warning(
-                    message.author,
-                    f"Bad word: {word}"
-                )
+            return
 
-                return
-
-            except Exception as e:
-                print(e)
+        except Exception as e:
+            print(e)
 
     await bot.process_commands(message)
 
@@ -371,19 +445,8 @@ async def eightball(
     question: str
 ):
 
-    responses = [
-        "Yes",
-        "No",
-        "Maybe",
-        "Absolutely",
-        "Ask again later",
-        "Definitely not",
-        "Without a doubt",
-        "Very likely"
-    ]
-
     await interaction.response.send_message(
-        random.choice(responses)
+        random.choice(EIGHTBALL_RESPONSES)
     )
 
 @bot.tree.command(
@@ -526,6 +589,23 @@ async def purge(
     amount: int
 ):
 
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message(
+            "Amount must be between 1 and 100.",
+            ephemeral=True
+        )
+        return
+
+    if not hasattr(
+        interaction.channel,
+        "purge"
+    ):
+        await interaction.response.send_message(
+            "This command can only be used in a text channel.",
+            ephemeral=True
+        )
+        return
+
     await interaction.response.defer(
         ephemeral=True
     )
@@ -598,7 +678,8 @@ async def on_app_command_error(
         app_commands.MissingPermissions
     ):
 
-        await interaction.response.send_message(
+        await send_interaction_message(
+            interaction,
             "You don't have permission "
             "to use this command.",
             ephemeral=True
@@ -607,6 +688,12 @@ async def on_app_command_error(
     else:
 
         print(error)
+
+        await send_interaction_message(
+            interaction,
+            "I couldn't complete that command.",
+            ephemeral=True
+        )
 
 # =====================================================
 # RUN
