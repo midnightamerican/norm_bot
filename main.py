@@ -1,4 +1,5 @@
 import discord 
+import aiohttp
 from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
@@ -54,6 +55,20 @@ PERMISSION_NAMES = {
     "ban_members": "Ban Members",
     "kick_members": "Kick Members",
     "manage_messages": "Manage Messages"
+}
+
+SCOREBOARD_LEAGUES = {
+    "nfl": ("football", "nfl", "NFL"),
+    "nba": ("basketball", "nba", "NBA"),
+    "mlb": ("baseball", "mlb", "MLB"),
+    "nhl": ("hockey", "nhl", "NHL"),
+    "wnba": ("basketball", "wnba", "WNBA"),
+    "ncaaf": ("football", "college-football", "College Football"),
+    "ncaamb": (
+        "basketball",
+        "mens-college-basketball",
+        "Men's College Basketball"
+    )
 }
 
 # =====================================================
@@ -178,6 +193,91 @@ def bot_can_moderate(member, permission):
         )
 
     return True, None
+
+def format_scoreboard_event(event):
+
+    competition = event.get("competitions", [{}])[0]
+    status = competition.get("status", {}).get("type", {})
+    competitors = competition.get("competitors", [])
+
+    teams = {
+        competitor.get("homeAway"): competitor
+        for competitor in competitors
+    }
+
+    home = teams.get("home")
+    away = teams.get("away")
+
+    if not home or not away:
+        return None
+
+    home_team = home.get("team", {})
+    away_team = away.get("team", {})
+
+    home_name = (
+        home_team.get("shortDisplayName")
+        or home_team.get("displayName")
+        or "Home"
+    )
+    away_name = (
+        away_team.get("shortDisplayName")
+        or away_team.get("displayName")
+        or "Away"
+    )
+
+    state = status.get("state")
+    detail = (
+        status.get("shortDetail")
+        or status.get("detail")
+        or "Scheduled"
+    )
+
+    if state == "pre":
+        return f"**{away_name} at {home_name}**\n{detail}"
+
+    away_score = away.get("score", "0")
+    home_score = home.get("score", "0")
+
+    return (
+        f"**{away_name} {away_score} - "
+        f"{home_name} {home_score}**\n{detail}"
+    )
+
+async def fetch_scoreboard(league_key):
+
+    sport, league, display_name = SCOREBOARD_LEAGUES[league_key]
+    url = (
+        "https://site.api.espn.com/apis/site/v2/sports/"
+        f"{sport}/{league}/scoreboard"
+    )
+
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url) as response:
+            response.raise_for_status()
+            data = await response.json()
+
+    events = data.get("events", [])
+    lines = [
+        formatted
+        for event in events[:10]
+        if (formatted := format_scoreboard_event(event))
+    ]
+
+    embed = discord.Embed(
+        title=f"{display_name} Scores",
+        color=discord.Color.green()
+    )
+
+    if lines:
+        embed.description = "\n\n".join(lines)
+    else:
+        embed.description = "No games found right now."
+
+    embed.set_footer(text="Score data from ESPN")
+
+    return embed
 
 # =====================================================
 # JSON UTILITIES
@@ -551,6 +651,56 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"Pong! {round(bot.latency * 1000)}ms"
     )
+
+@bot.tree.command(
+    name="scores",
+    description="Show live or recent game scores"
+)
+@app_commands.describe(
+    league="League to show scores for"
+)
+@app_commands.choices(
+    league=[
+        app_commands.Choice(name="NFL", value="nfl"),
+        app_commands.Choice(name="NBA", value="nba"),
+        app_commands.Choice(name="MLB", value="mlb"),
+        app_commands.Choice(name="NHL", value="nhl"),
+        app_commands.Choice(name="WNBA", value="wnba"),
+        app_commands.Choice(
+            name="College Football",
+            value="ncaaf"
+        ),
+        app_commands.Choice(
+            name="Men's College Basketball",
+            value="ncaamb"
+        )
+    ]
+)
+async def scores(
+    interaction: discord.Interaction,
+    league: app_commands.Choice[str]
+):
+
+    await interaction.response.defer()
+
+    try:
+        embed = await fetch_scoreboard(league.value)
+
+        await interaction.followup.send(embed=embed)
+
+    except aiohttp.ClientResponseError as e:
+        print(f"Scoreboard API returned an error: {e}")
+
+        await interaction.followup.send(
+            "I couldn't get scores for that league right now."
+        )
+
+    except aiohttp.ClientError as e:
+        print(f"Scoreboard request failed: {e}")
+
+        await interaction.followup.send(
+            "I couldn't reach the scoreboard service right now."
+        )
 
 @bot.tree.command(
     name="eightball",
