@@ -49,6 +49,13 @@ ALLOWED_DOMAINS = [
 SPAM_WINDOW = 5
 SPAM_LIMIT = 3
 
+PERMISSION_NAMES = {
+    "moderate_members": "Moderate Members",
+    "ban_members": "Ban Members",
+    "kick_members": "Kick Members",
+    "manage_messages": "Manage Messages"
+}
+
 # =====================================================
 # LOGGING
 # =====================================================
@@ -130,6 +137,47 @@ async def send_interaction_message(
             content,
             ephemeral=ephemeral
         )
+
+async def send_channel_message(channel, content):
+
+    try:
+        await channel.send(content)
+    except discord.Forbidden:
+        print(
+            "Missing permission to send messages "
+            f"in channel {channel}."
+        )
+
+def bot_can_moderate(member, permission):
+
+    guild = member.guild
+    bot_member = guild.me or guild.get_member(bot.user.id)
+
+    if bot_member is None:
+        return False, "I could not find my bot member record."
+
+    if member.id == guild.owner_id:
+        return False, "I cannot moderate the server owner."
+
+    if not getattr(
+        bot_member.guild_permissions,
+        permission,
+        False
+    ):
+        permission_name = PERMISSION_NAMES.get(
+            permission,
+            permission
+        )
+
+        return False, f"I need the {permission_name} permission."
+
+    if bot_member.top_role <= member.top_role:
+        return (
+            False,
+            "My highest role must be above that member's highest role."
+        )
+
+    return True, None
 
 # =====================================================
 # JSON UTILITIES
@@ -279,6 +327,10 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    if message.guild is None:
+        await bot.process_commands(message)
+        return
+
     now = time.time()
     user_id = message.author.id
 
@@ -315,13 +367,30 @@ async def on_message(message):
 
             last_timeout[user_id] = now
 
+            can_timeout, reason = bot_can_moderate(
+                message.author,
+                "moderate_members"
+            )
+
+            if not can_timeout:
+                user_messages[user_id] = []
+
+                await send_channel_message(
+                    message.channel,
+                    "I detected spam, but I couldn't timeout "
+                    f"{message.author.mention}. {reason}"
+                )
+
+                return
+
             await message.author.timeout(
                 discord.utils.utcnow()
                 + timedelta(minutes=timeout_minutes),
                 reason="Spam Detection"
             )
 
-            await message.channel.send(
+            await send_channel_message(
+                message.channel,
                 f"{message.author.mention} "
                 f"timed out for spamming."
             )
@@ -330,14 +399,42 @@ async def on_message(message):
 
             if timeout_counts[user_id] > 2:
 
+                can_ban, reason = bot_can_moderate(
+                    message.author,
+                    "ban_members"
+                )
+
+                if not can_ban:
+                    await send_channel_message(
+                        message.channel,
+                        "I would ban this member for repeated spam, "
+                        f"but I can't. {reason}"
+                    )
+
+                    return
+
                 await message.author.ban(
                     reason="Repeated spam"
                 )
 
-                await message.channel.send(
+                await send_channel_message(
+                    message.channel,
                     f"{message.author.mention} "
                     f"has been banned for repeated spam."
                 )
+
+            return
+
+        except discord.Forbidden as e:
+            user_messages[user_id] = []
+            print(f"Discord denied a spam moderation action: {e}")
+
+            await send_channel_message(
+                message.channel,
+                "I detected spam, but Discord denied the moderation "
+                "action. Check my role position and moderation "
+                "permissions."
+            )
 
             return
 
@@ -375,6 +472,17 @@ async def on_message(message):
 
                 return
 
+            except discord.Forbidden as e:
+                print(f"Discord denied link moderation: {e}")
+
+                await send_channel_message(
+                    message.channel,
+                    "I found a blocked link, but I need Manage Messages "
+                    "and a high enough role to delete it."
+                )
+
+                return
+
             except Exception as e:
                 print(e)
 
@@ -400,6 +508,17 @@ async def on_message(message):
             await add_warning(
                 message.author,
                 f"Bad word: {bad_word}"
+            )
+
+            return
+
+        except discord.Forbidden as e:
+            print(f"Discord denied bad-word moderation: {e}")
+
+            await send_channel_message(
+                message.channel,
+                "I found blocked language, but I need Manage Messages "
+                "and a high enough role to delete it."
             )
 
             return
